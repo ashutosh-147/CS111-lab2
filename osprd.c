@@ -254,14 +254,21 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         eprintk("start: %d\n", d->mutex.lock);
 
         unsigned ticket = d->ticket_tail++;
+        int ret = -1;        
 
         if(d->mutex.lock < 0)
         {
             eprintk("Waiting for lock\n");
             // assuming ticket head and tail are both initially 
             eprintk("Waiting for head: %d\n", ticket);
-            wait_event_interruptible(d->blockq, (ticket <= d->ticket_head));
+            ret = wait_event_interruptible(d->blockq, (ticket <= d->ticket_head));
             eprintk("after block: %d\n", d->mutex.lock);
+        }
+
+        if(ret == -ERESTARTSYS)
+        {
+            d->ticket_head++;
+            return ret;
         }
 
         osp_spin_lock(&d->mutex);
@@ -282,7 +289,28 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to try acquire\n");
-		r = -ENOTTY;
+        //eprintk("start: %d\n", d->mutex.lock);
+
+        //unsigned ticket = d->ticket_tail++;
+
+        if(d->mutex.lock < 0)
+        {
+            //eprintk("Waiting for lock\n");
+            // assuming ticket head and tail are both initially 
+            //eprintk("Waiting for head: %d\n", ticket);
+            //wait_event_interruptible(d->blockq, (ticket <= d->ticket_head));
+            r = -EBUSY;
+            //eprintk("after block: %d\n", d->mutex.lock);
+        }
+        else
+        {
+            d->ticket_tail++;
+            osp_spin_lock(&d->mutex);
+            d->filp = filp;
+            r = 0;
+        }
+		//r = -ENOTTY;
+        //r = 0;
 
 	} else if (cmd == OSPRDIOCRELEASE) {
 
