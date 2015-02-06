@@ -70,17 +70,18 @@ void grow_filp_array(filp_array_t *array) {
 
 void insert_filp_array(filp_array_t *array, struct file* filp) {
     if(array->size == array->index++) {
-        eprintk("growing array\n");
+//        eprintk("growing array\n");
         grow_filp_array(array);
         array->ptrs[array->index] = filp;
         return;
     }
 
-    eprintk("adding filp\n");
+//    eprintk("adding filp\n");
     int i;
     for(i = 0; i < array->size; i++) {
         if(array->ptrs[i] == 0) {
             array->ptrs[i] = filp;
+            eprintk("added to pos: %d\n", i);
             return;
         }
     }
@@ -237,7 +238,8 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// Your code here.
         if(d->mutex.lock < 0 && remove_filp_array(&d->filp_data, filp) == 1)
         {
-            eprintk("Unlocking from file close: %d\n", d->mutex.lock);
+//            eprintk("Unlocking from file close: %d\n", d->mutex.lock);
+            eprintk("file had lock\n");
             switch(d->num_readers)
             {
                 case 1:
@@ -249,10 +251,12 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
                     d->num_readers--;
                     break;
             }
-            eprintk("after unlocking from file close: %d\n", d->mutex.lock);
+//            eprintk("after unlocking from file close: %d\n", d->mutex.lock);
             d->ticket_head++;
-            eprintk("Head now: %d\n", d->ticket_head);
+//            eprintk("Head now: %d\n", d->ticket_head);
             wake_up_all(&d->blockq);
+        } else {
+            eprintk("file had no lock - mutex: %d\n", d->mutex.lock);
         }
         
 
@@ -326,20 +330,20 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 
         // Your code here (instead of the next two lines).
-		eprintk("Attempting to acquire\n");
-        eprintk("start: %d\n", d->mutex.lock);
+//		eprintk("Attempting to acquire\n");
+//        eprintk("start: %d\n", d->mutex.lock);
 
         unsigned ticket = d->ticket_tail++;
         int ret = -1;        
 
         if(d->mutex.lock < 0)
         {
-            eprintk("Waiting for lock\n");
+//            eprintk("Waiting for lock\n");
             // assuming ticket head and tail are both initially 
-            eprintk("Waiting for head: %d\n", ticket);
-            //ret = wait_event_interruptible(d->blockq, ((ticket <= d->ticket_head) || (!filp_writable && d->num_readers > 0 && ((ticket <= d->ticket_head-1)))));
-            ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head);
-            eprintk("after block: %d\n", d->mutex.lock);
+//            eprintk("Waiting for head: %d\n", ticket);
+            ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head || (!filp_writable && d->num_readers > 0 && ticket <= d->ticket_head+1));
+            //ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head);
+//            eprintk("after block: %d\n", d->mutex.lock);
         }
 
         if(ret == -ERESTARTSYS)
@@ -347,16 +351,23 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
             d->ticket_head++;
             return ret;
         }
+        eprintk("woke up with num readers = %d\n", d->num_readers);
         
+        insert_filp_array(&d->filp_data, filp);
         if(d->num_readers == 0)
         {
             osp_spin_lock(&d->mutex);
-            insert_filp_array(&d->filp_data, filp);
+//            insert_filp_array(&d->filp_data, filp);
         }
         if(!filp_writable)
+        {
             d->num_readers++;
+            wake_up_all(&d->blockq);
+        }
+
         
-        eprintk("Got lock\n");
+        eprintk("num readers after lock aquire %d\n", d->num_readers);
+//        eprintk("Got lock\n");
 
 		//r = -ENOTTY;
         r = 0;
@@ -371,7 +382,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Otherwise, if we can grant the lock request, return 0.
 
 		// Your code here (instead of the next two lines).
-		eprintk("Attempting to try acquire\n");
+//		eprintk("Attempting to try acquire\n");
         //eprintk("start: %d\n", d->mutex.lock);
 
         //unsigned ticket = d->ticket_tail++;
@@ -404,7 +415,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next line).
 
-        eprintk("Releasing lock: %d\n", d->mutex.lock);
+//        eprintk("Releasing lock: %d\n", d->mutex.lock);
         
         switch(d->num_readers)
         {
@@ -418,11 +429,11 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
                 break;
         }
         d->ticket_head++;
-        eprintk("Head now: %d\n", d->ticket_head);
+//        eprintk("Head now: %d\n", d->ticket_head);
         wake_up_all(&d->blockq);
         remove_filp_array(&d->filp_data, filp);
 
-        eprintk("after release: %d\n", d->mutex.lock);
+//        eprintk("after release: %d\n", d->mutex.lock);
 
 		//r = -ENOTTY;
         r = 0;
