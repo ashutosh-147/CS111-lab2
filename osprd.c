@@ -44,6 +44,68 @@ MODULE_AUTHOR("Skeletor");
 static int nsectors = 32;
 module_param(nsectors, int, 0);
 
+////////////////////////////////////////////
+// filp array
+////////////////////////////////////////////
+
+typedef struct filp_array {
+    struct file **ptrs;
+    unsigned index;
+    size_t size;
+} filp_array_t;
+
+void init_filp_array(filp_array_t *array) {
+    array->index = 0;
+    array->size = 5;
+    array->ptrs = kzalloc(array->size * sizeof(struct file*), GFP_ATOMIC);
+}
+
+void grow_filp_array(filp_array_t *array) {
+    struct file **temp = kzalloc(array->size * 2 * sizeof(struct file*), GFP_ATOMIC);
+    memcpy(temp, array->ptrs, array->size);
+    kfree(array->ptrs);
+    array->ptrs = temp;
+    array->size *= 2;
+}
+
+void insert_filp_array(filp_array_t *array, struct file* filp) {
+    if(array->size == array->index++) {
+        eprintk("growing array\n");
+        grow_filp_array(array);
+        array->ptrs[array->index] = filp;
+        return;
+    }
+
+    eprintk("adding filp\n");
+    int i;
+    for(i = 0; i < array->size; i++) {
+        if(array->ptrs[i] == 0) {
+            array->ptrs[i] = filp;
+            return;
+        }
+    }
+}
+
+int remove_filp_array(filp_array_t *array, struct file* filp) {
+    
+    int i;
+    for(i = 0; i < array->size; i++) {
+        if(array->ptrs[i] == filp) {
+            array->ptrs[i] = 0;
+            array->index--;
+            eprintk("removing filp successful\n");
+            return 1;
+        }
+    }
+    eprintk("could not find filp\n");
+    return 0;
+}
+
+
+////////////////////////////////////////////
+// filp array
+////////////////////////////////////////////
+
 
 /* The internal representation of our device. */
 typedef struct osprd_info {
@@ -66,6 +128,8 @@ typedef struct osprd_info {
 	         in detecting deadlock. */
 
     struct file *filp;
+    filp_array_t filp_data;
+    int num_readers;
 
 	// The following elements are used internally; you don't need
 	// to understand them.
@@ -168,11 +232,23 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// a lock, release the lock.  Also wake up blocked processes
 		// as appropriate.
 
+        eprintk("Closing file - num readers: %d\n", d->num_readers);
+
 		// Your code here.
-        if(d->mutex.lock < 0 && d->filp == filp)
+        if(d->mutex.lock < 0 && remove_filp_array(&d->filp_data, filp) == 1)
         {
             eprintk("Unlocking from file close: %d\n", d->mutex.lock);
-            osp_spin_unlock(&d->mutex);
+            switch(d->num_readers)
+            {
+                case 1:
+                    d->num_readers--;
+                case 0:
+                    osp_spin_unlock(&d->mutex);
+                    break;
+                default:
+                    d->num_readers--;
+                    break;
+            }
             eprintk("after unlocking from file close: %d\n", d->mutex.lock);
             d->ticket_head++;
             eprintk("Head now: %d\n", d->ticket_head);
@@ -261,7 +337,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
             eprintk("Waiting for lock\n");
             // assuming ticket head and tail are both initially 
             eprintk("Waiting for head: %d\n", ticket);
-            ret = wait_event_interruptible(d->blockq, (ticket <= d->ticket_head));
+            //ret = wait_event_interruptible(d->blockq, ((ticket <= d->ticket_head) || (!filp_writable && d->num_readers > 0 && ((ticket <= d->ticket_head-1)))));
+            ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head);
             eprintk("after block: %d\n", d->mutex.lock);
         }
 
@@ -270,9 +347,15 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
             d->ticket_head++;
             return ret;
         }
-
-        osp_spin_lock(&d->mutex);
-        d->filp = filp;
+        
+        if(d->num_readers == 0)
+        {
+            osp_spin_lock(&d->mutex);
+            insert_filp_array(&d->filp_data, filp);
+        }
+        if(!filp_writable)
+            d->num_readers++;
+        
         eprintk("Got lock\n");
 
 		//r = -ENOTTY;
@@ -292,21 +375,19 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         //eprintk("start: %d\n", d->mutex.lock);
 
         //unsigned ticket = d->ticket_tail++;
-
-        if(d->mutex.lock < 0)
+        
+        // when is locked AND (is reader but write locked OR is writer)
+        if(d->mutex.lock < 0 && (d->num_readers == 0 || filp_writable))
         {
-            //eprintk("Waiting for lock\n");
-            // assuming ticket head and tail are both initially 
-            //eprintk("Waiting for head: %d\n", ticket);
-            //wait_event_interruptible(d->blockq, (ticket <= d->ticket_head));
             r = -EBUSY;
-            //eprintk("after block: %d\n", d->mutex.lock);
         }
         else
         {
             d->ticket_tail++;
             osp_spin_lock(&d->mutex);
-            d->filp = filp;
+            insert_filp_array(&d->filp_data, filp);
+            if(!filp_writable)
+                d->num_readers++;
             r = 0;
         }
 		//r = -ENOTTY;
@@ -325,11 +406,21 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
         eprintk("Releasing lock: %d\n", d->mutex.lock);
         
-        osp_spin_unlock(&d->mutex);
+        switch(d->num_readers)
+        {
+            case 1:
+                d->num_readers--;
+            case 0:
+                osp_spin_unlock(&d->mutex);
+                break;
+            default:
+                d->num_readers--;
+                break;
+        }
         d->ticket_head++;
         eprintk("Head now: %d\n", d->ticket_head);
         wake_up_all(&d->blockq);
-        d->filp = NULL;
+        remove_filp_array(&d->filp_data, filp);
 
         eprintk("after release: %d\n", d->mutex.lock);
 
@@ -350,6 +441,8 @@ static void osprd_setup(osprd_info_t *d)
 	osp_spin_lock_init(&d->mutex);
 	d->ticket_head = d->ticket_tail = 0;
 	/* Add code here if you add fields to osprd_info_t. */
+    d->num_readers = 0;
+    init_filp_array(&d->filp_data);
 }
 
 
