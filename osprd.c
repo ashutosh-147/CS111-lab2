@@ -273,6 +273,18 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
  * osprd_lock
  */
 
+int unlock_condition(osprd_info_t *d, unsigned ticket, int writable)
+{
+    unsigned i;
+    if(ticket <= d->ticket_head)
+        return 1;
+    if(writable)
+        return 0;
+    if(ticket - d->num_readers == d->ticket_head)
+        return 1;
+    return 0;
+}
+
 /*
  * osprd_ioctl(inode, filp, cmd, arg)
  *   Called to perform an ioctl on the named file.
@@ -341,8 +353,9 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 //            eprintk("Waiting for lock\n");
             // assuming ticket head and tail are both initially 
 //            eprintk("Waiting for head: %d\n", ticket);
-            ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head || (!filp_writable && d->num_readers > 0 && ticket <= d->ticket_head+1));
+            //ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head || (!filp_writable && d->num_readers > 0 && ticket <= d->ticket_head+1));
             //ret = wait_event_interruptible(d->blockq, ticket <= d->ticket_head);
+            ret = wait_event_interruptible(d->blockq, unlock_condition(d, ticket, filp_writable));
 //            eprintk("after block: %d\n", d->mutex.lock);
         }
 
