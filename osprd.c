@@ -81,7 +81,7 @@ void insert_filp_array(filp_array_t *array, struct file* filp) {
     for(i = 0; i < array->size; i++) {
         if(array->ptrs[i] == 0) {
             array->ptrs[i] = filp;
-            eprintk("added to pos: %d\n", i);
+//            eprintk("added to pos: %d\n", i);
             return;
         }
     }
@@ -94,11 +94,11 @@ int remove_filp_array(filp_array_t *array, struct file* filp) {
         if(array->ptrs[i] == filp) {
             array->ptrs[i] = 0;
             array->index--;
-            eprintk("removing filp successful\n");
+//            eprintk("removing filp successful\n");
             return 1;
         }
     }
-    eprintk("could not find filp\n");
+//    eprintk("could not find filp\n");
     return 0;
 }
 
@@ -107,11 +107,11 @@ int check_filp_array(filp_array_t *array, struct file* filp) {
     int i;
     for(i = 0; i < array->size; i++) {
         if(array->ptrs[i] == filp) {
-            eprintk("possible deadlock\n");
+//            eprintk("possible deadlock\n");
             return 1;
         }
     }
-    eprintk("not in list\n");
+//    eprintk("not in list\n");
     return 0;
 }
 
@@ -215,7 +215,7 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
     } else if(rq_data_dir(req) == READ) {
         memcpy(req->buffer, d->data+start, num_bytes);
     } else {
-        eprintk("something else\n");
+//        eprintk("something else\n");
     }
 	//eprintk("Should process request %s...\n", req->cmd);
 
@@ -247,13 +247,13 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// a lock, release the lock.  Also wake up blocked processes
 		// as appropriate.
 
-        eprintk("Closing file - num readers: %d\n", d->num_readers);
+//        eprintk("Closing file - num readers: %d\n", d->num_readers);
 
 		// Your code here.
         if(d->mutex.lock < 0 && remove_filp_array(&d->filp_data, filp) == 1)
         {
 //            eprintk("Unlocking from file close: %d\n", d->mutex.lock);
-            eprintk("file had lock\n");
+//            eprintk("file had lock\n");
             switch(d->num_readers)
             {
                 case 1:
@@ -270,7 +270,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 //            eprintk("Head now: %d\n", d->ticket_head);
             wake_up_all(&d->blockq);
         } else {
-            eprintk("file had no lock - mutex: %d\n", d->mutex.lock);
+//            eprintk("file had no lock - mutex: %d\n", d->mutex.lock);
         }
         
 
@@ -363,18 +363,22 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 //		eprintk("Attempting to acquire\n");
 //        eprintk("start: %d\n", d->mutex.lock);
         
-        eprintk("inode pointer %p\n", inode);
+//        eprintk("inode pointer %p\n", inode);
         unsigned ticket = d->ticket_tail++;
         int ret = -1;        
 
         if(d->mutex.lock < 0)
         {
-            eprintk("checking lock owner\n");
+//            eprintk("checking lock owner\n");
 //            if(check_filp_array(&d->filp_data, filp) == 1)
 //                return -EDEADLK;
             d->num_locks = 0;
             for_each_open_file(current, count_locks, d);
-            if(d->num_locks > 0 && (filp_writable || !filp_writable && d->num_readers == 0))            return -EDEADLK;
+            if(d->num_locks > 0 && (filp_writable || !filp_writable && d->num_readers == 0)) 
+            {            
+                d->ticket_tail--;
+                return -EDEADLK;
+            }
 //            eprintk("Waiting for lock\n");
             // assuming ticket head and tail are both initially 
 //            eprintk("Waiting for head: %d\n", ticket);
@@ -389,7 +393,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
             d->ticket_head++;
             return ret;
         }
-        eprintk("woke up with num readers = %d\n", d->num_readers);
+//        eprintk("woke up with num readers = %d\n", d->num_readers);
         
         insert_filp_array(&d->filp_data, filp);
         if(d->num_readers == 0)
@@ -404,7 +408,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         }
 
         
-        eprintk("num readers after lock aquire %d\n", d->num_readers);
+//        eprintk("num readers after lock aquire %d\n", d->num_readers);
 //        eprintk("Got lock\n");
 
 		//r = -ENOTTY;
