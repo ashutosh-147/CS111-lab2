@@ -102,6 +102,19 @@ int remove_filp_array(filp_array_t *array, struct file* filp) {
     return 0;
 }
 
+int check_filp_array(filp_array_t *array, struct file* filp) {
+    
+    int i;
+    for(i = 0; i < array->size; i++) {
+        if(array->ptrs[i] == filp) {
+            eprintk("possible deadlock\n");
+            return 1;
+        }
+    }
+    eprintk("not in list\n");
+    return 0;
+}
+
 
 ////////////////////////////////////////////
 // filp array
@@ -128,9 +141,10 @@ typedef struct osprd_info {
 	/* HINT: You may want to add additional fields to help
 	         in detecting deadlock. */
 
-    struct file *filp;
+//    struct file *filp;
     filp_array_t filp_data;
     int num_readers;
+    int num_locks;
 
 	// The following elements are used internally; you don't need
 	// to understand them.
@@ -275,7 +289,6 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 
 int unlock_condition(osprd_info_t *d, unsigned ticket, int writable)
 {
-    unsigned i;
     if(ticket <= d->ticket_head)
         return 1;
     if(writable)
@@ -283,6 +296,11 @@ int unlock_condition(osprd_info_t *d, unsigned ticket, int writable)
     if(ticket - d->num_readers == d->ticket_head)
         return 1;
     return 0;
+}
+
+void count_locks(struct file *filp, osprd_info_t *d) {
+    if(file2osprd(filp) == d && check_filp_array(&d->filp_data, filp))
+        d->num_locks++;
 }
 
 /*
@@ -344,12 +362,19 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         // Your code here (instead of the next two lines).
 //		eprintk("Attempting to acquire\n");
 //        eprintk("start: %d\n", d->mutex.lock);
-
+        
+        eprintk("inode pointer %p\n", inode);
         unsigned ticket = d->ticket_tail++;
         int ret = -1;        
 
         if(d->mutex.lock < 0)
         {
+            eprintk("checking lock owner\n");
+//            if(check_filp_array(&d->filp_data, filp) == 1)
+//                return -EDEADLK;
+            d->num_locks = 0;
+            for_each_open_file(current, count_locks, d);
+            if(d->num_locks > 0 && (filp_writable || !filp_writable && d->num_readers == 0))            return -EDEADLK;
 //            eprintk("Waiting for lock\n");
             // assuming ticket head and tail are both initially 
 //            eprintk("Waiting for head: %d\n", ticket);
