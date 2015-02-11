@@ -145,6 +145,8 @@ typedef struct osprd_info {
     filp_array_t filp_data;
     int num_readers;
     int num_locks;
+    // 0 is unlocked -1 is locked
+    int osprd_lock;
 
 	// The following elements are used internally; you don't need
 	// to understand them.
@@ -250,7 +252,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 //        eprintk("Closing file - num readers: %d\n", d->num_readers);
 
 		// Your code here.
-        if(d->mutex.lock < 0 && remove_filp_array(&d->filp_data, filp) == 1)
+        if(d->osprd_lock < 0 && remove_filp_array(&d->filp_data, filp) == 1)
         {
 //            eprintk("Unlocking from file close: %d\n", d->mutex.lock);
 //            eprintk("file had lock\n");
@@ -259,7 +261,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
                 case 1:
                     d->num_readers--;
                 case 0:
-                    osp_spin_unlock(&d->mutex);
+                    d->osprd_lock = 0;
                     break;
                 default:
                     d->num_readers--;
@@ -367,7 +369,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         unsigned ticket = d->ticket_tail++;
         int ret = -1;        
 
-        if(d->mutex.lock < 0)
+        if(d->osprd_lock < 0)
         {
 //            eprintk("checking lock owner\n");
 //            if(check_filp_array(&d->filp_data, filp) == 1)
@@ -398,7 +400,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         insert_filp_array(&d->filp_data, filp);
         if(d->num_readers == 0)
         {
-            osp_spin_lock(&d->mutex);
+            d->osprd_lock = -1;
 //            insert_filp_array(&d->filp_data, filp);
         }
         if(!filp_writable)
@@ -430,14 +432,14 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
         //unsigned ticket = d->ticket_tail++;
         
         // when is locked AND (is reader but write locked OR is writer)
-        if(d->mutex.lock < 0 && (d->num_readers == 0 || filp_writable))
+        if(d->osprd_lock < 0 && (d->num_readers == 0 || filp_writable))
         {
             r = -EBUSY;
         }
         else
         {
             d->ticket_tail++;
-            osp_spin_lock(&d->mutex);
+            d->osprd_lock = -1;
             insert_filp_array(&d->filp_data, filp);
             if(!filp_writable)
                 d->num_readers++;
@@ -464,7 +466,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
             case 1:
                 d->num_readers--;
             case 0:
-                osp_spin_unlock(&d->mutex);
+                d->osprd_lock = 0;
                 break;
             default:
                 d->num_readers--;
@@ -494,6 +496,7 @@ static void osprd_setup(osprd_info_t *d)
 	osp_spin_lock_init(&d->mutex);
 	d->ticket_head = d->ticket_tail = 0;
 	/* Add code here if you add fields to osprd_info_t. */
+    d->osprd_lock = 0;
     d->num_readers = 0;
     init_filp_array(&d->filp_data);
 }
